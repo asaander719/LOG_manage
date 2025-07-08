@@ -1,0 +1,62 @@
+apiVersion: 1
+
+datasources:
+  # Prometheus for metrics
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 5s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: jaeger
+          urlDisplayLabel: "View Trace"
+
+  # VictoriaMetrics as alternative metrics source
+  - name: VictoriaMetrics
+    type: prometheus
+    access: proxy
+    url: http://victoriametrics:8428
+    editable: true
+    jsonData:
+      timeInterval: 5s
+
+  # Jaeger for distributed tracing
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: true
+    jsonData:
+      tracesToLogs:
+        datasourceUid: elasticsearch
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        tags: ['job', 'instance', 'pod', 'namespace']
+        filterByTraceID: true
+        filterBySpanID: false
+        mapTagNamesEnabled: true
+
+  # Elasticsearch for logs
+  - name: Elasticsearch
+    uid: elasticsearch
+    type: elasticsearch
+    access: proxy
+    url: http://elasticsearch:9200
+    database: otel-logs
+    editable: true
+    jsonData:
+      esVersion: "8.0.0"
+      timeField: "@timestamp"
+      interval: Daily
+      logMessageField: message
+      logLevelField: level
+      maxConcurrentShardRequests: 256
+      includeFrozen: false
+      tracesToLogs:
+        traceIdField: trace_id
+        spanIdField: span_id
