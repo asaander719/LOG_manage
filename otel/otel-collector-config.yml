@@ -1,0 +1,159 @@
+receivers:
+  # OTLP receiver for traces and logs from applications
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - "*"
+          allowed_headers:
+            - "*"
+
+  # Prometheus receiver to scrape metrics from FastAPI
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'fastapi-backend'
+          static_configs:
+            - targets: ['fastapi-backend:8000']
+          metrics_path: '/metrics'
+          scrape_interval: 15s
+
+  # HTTP check receiver for health monitoring
+  httpcheck:
+    targets:
+      - endpoint: http://fastapi-backend:8000/health
+        method: GET
+    collection_interval: 30s
+
+processors:
+  # Batch processor to reduce the number of outgoing connections
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+
+  # Resource processor to add additional attributes
+  resource:
+    attributes:
+      - key: environment
+        value: "development"
+        action: upsert
+      - key: collector.version
+        value: "0.89.0"
+        action: upsert
+
+  # Attributes processor to modify span/log attributes
+  attributes:
+    actions:
+      # Remove sensitive headers
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+      # Add custom attributes
+      - key: collector.processed
+        value: "true"
+        action: upsert
+
+  # Filter processor to exclude health checks from traces
+  filter:
+    traces:
+      span:
+        - 'attributes["http.target"] == "/health"'
+        - 'attributes["http.target"] == "/metrics"'
+
+exporters:
+  # Jaeger exporter for traces
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+  # OTLP exporter for Jaeger (alternative)
+  otlp/jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+  # Prometheus exporter for metrics
+  prometheus:
+    endpoint: "0.0.0.0:8888"
+    send_timestamps: true
+    metric_expiration: 180m
+    enable_open_metrics: true
+
+  # VictoriaMetrics exporter
+  prometheusremotewrite:
+    endpoint: "http://victoriametrics:8428/api/v1/write"
+    tls:
+      insecure: true
+
+  # Elasticsearch exporter for logs
+  elasticsearch:
+    endpoints: 
+      - http://elasticsearch:9200
+    logs_index: otel-logs
+    traces_index: otel-traces
+    mapping:
+      mode: none
+    timeout: 30s
+
+  # Logging exporter for debugging
+  logging:
+    loglevel: debug
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+  # File exporter for backup/debugging
+  file:
+    path: /tmp/otel-data.json
+
+extensions:
+  # Health check extension
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+  # Performance profiler
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+  # zpages for debugging
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, pprof, zpages]
+  
+  pipelines:
+    # Traces pipeline
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, filter, batch, resource, attributes]
+      exporters: [jaeger, elasticsearch, logging]
+
+    # Metrics pipeline
+    metrics:
+      receivers: [otlp, prometheus, httpcheck]
+      processors: [memory_limiter, batch, resource]
+      exporters: [prometheus, prometheusremotewrite, logging]
+
+    # Logs pipeline
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource, attributes]
+      exporters: [elasticsearch, logging]
+
+  telemetry:
+    logs:
+      level: "info"
+    metrics:
+      address: 0.0.0.0:8889
